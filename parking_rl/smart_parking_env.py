@@ -116,14 +116,23 @@ class SmartParkingEnv(gym.Env):
         self._last_snap: Dict[str, Tuple[float, float]] = {}
 
     def _build_snapshots(self) -> None:
-        self._snapshots: List[Dict[str, Tuple[float, float]]] = []
-        for ts in self._times:
-            sub = self._df[self._df["LastUpdated"] == ts]
+        """
+        Her benzersiz LastUpdated için (parking_id -> (Occupancy, Capacity)) sözlüğü.
+        groupby ile O(N); önceki sürüm her timestamp için tüm DataFrame'i tarıyordu (O(N*T)).
+        """
+        snap_by_time: Dict[pd.Timestamp, Dict[str, Tuple[float, float]]] = {}
+        for ts, group in self._df.groupby("LastUpdated", sort=False):
             snap: Dict[str, Tuple[float, float]] = {}
-            for _, row in sub.iterrows():
-                pid = str(row["SystemCodeNumber"])
-                snap[pid] = (float(row["Occupancy"]), float(row["Capacity"]))
-            self._snapshots.append(snap)
+            pids = group["SystemCodeNumber"].astype(str).to_numpy()
+            occs = group["Occupancy"].to_numpy(dtype=float)
+            caps = group["Capacity"].to_numpy(dtype=float)
+            for pid, occ, cap in zip(pids, occs, caps):
+                snap[pid] = (float(occ), float(cap))
+            snap_by_time[ts] = snap
+
+        self._snapshots: List[Dict[str, Tuple[float, float]]] = [
+            snap_by_time.get(ts, {}) for ts in self._times
+        ]
 
     def _merge_snapshot(self, t_idx: int) -> Dict[str, Tuple[float, float]]:
         raw = self._snapshots[t_idx]
