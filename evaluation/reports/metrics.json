@@ -1,0 +1,41 @@
+{
+  "lstm": {
+    "lstm_mae": 0.08327356499253731,
+    "lstm_rmse": 0.12000520068175746,
+    "n": 268
+  },
+  "baselines": {
+    "random": {
+      "policy": "random",
+      "success_rate": 0.44,
+      "mean_episode_return": -475.56450000000035,
+      "mean_regret_vs_bfs_oracle": 784.4080000000005,
+      "mean_episode_length": 176.74,
+      "episodes": 100
+    },
+    "greedy_manhattan": {
+      "policy": "greedy_manhattan",
+      "success_rate": 1.0,
+      "mean_episode_return": 308.84349999999995,
+      "mean_regret_vs_bfs_oracle": 0.0,
+      "mean_episode_length": 7.69,
+      "episodes": 100
+    },
+    "bfs_oracle": {
+      "policy": "bfs_oracle",
+      "success_rate": 1.0,
+      "mean_episode_return": 308.84349999999995,
+      "mean_regret_vs_bfs_oracle": 0.0,
+      "mean_episode_length": 7.69,
+      "episodes": 100
+    }
+  },
+  "rl_sb3": {
+    "rl_algo": "ppo",
+    "success_rate": 0.87,
+    "mean_episode_return": 120.8634946668148,
+    "mean_regret_vs_bfs_oracle": 187.98000533318518,
+    "mean_episode_length": 40.83,
+    "episodes": 100
+  }
+}

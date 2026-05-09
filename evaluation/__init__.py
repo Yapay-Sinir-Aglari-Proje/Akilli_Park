@@ -1,0 +1,1 @@
+"""Değerlendirme raporları ve görseller."""
