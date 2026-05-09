@@ -1,0 +1,37 @@
+# Python sistem dosyaları
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Sanal ortamlar (Virtual Environments)
+.venv/
+venv/
+env/
+
+# Çevresel değişkenler ve loglar
+.env
+*.log
+
+# İşletim sistemi dosyaları (Mac/Windows)
+.DS_Store
+Thumbs.db
+
+# Editör dosyaları
+.cursor/
+.vscode/
+.idea/
+
+# --- PROJEYE ÖZEL ---
+
+# Veri setleri (Sadece ham veri kalmalı, işlenmiş büyük dosyalar gitmemeli)
+data/processed/*.csv
+
+# Modeller (Büyük binary dosyalar GitHub'ı şişirir)
+models/*.h5
+models/*.zip
+models/*.keras
+
+# Çıktılar (Herkesin kendi yerelinde oluşmalı)
+output/*.png
+output/*.jpg
+output/*.jpeg
