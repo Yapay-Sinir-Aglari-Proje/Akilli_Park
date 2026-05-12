@@ -1,0 +1,48 @@
+{
+  "lstm": {
+    "lstm_mae": 0.10470939498505931,
+    "lstm_rmse": 0.131916061094386,
+    "lstm_mape_pct": 44.928520615340474,
+    "lstm_r2": 0.5563070142295139,
+    "n": 268
+  },
+  "baselines": {
+    "random": {
+      "policy": "random",
+      "success_rate": 0.44,
+      "mean_episode_return": -707.6393999999996,
+      "mean_regret_vs_bfs_oracle": 1033.2470999999996,
+      "mean_episode_length": 176.74,
+      "episodes": 100
+    },
+    "greedy_manhattan": {
+      "policy": "greedy_manhattan",
+      "success_rate": 1.0,
+      "mean_episode_return": 325.6077,
+      "mean_regret_vs_bfs_oracle": 0.0,
+      "mean_episode_length": 7.69,
+      "episodes": 100
+    },
+    "bfs_oracle": {
+      "policy": "bfs_oracle",
+      "success_rate": 1.0,
+      "mean_episode_return": 325.6077,
+      "mean_regret_vs_bfs_oracle": 0.0,
+      "mean_episode_length": 7.69,
+      "episodes": 100
+    }
+  },
+  "rl_sb3": {
+    "rl_algo": "ppo",
+    "success_rate": 0.93,
+    "mean_parking_search_steps": 24.83,
+    "mean_episode_return": 169.06508697509764,
+    "mean_regret_vs_bfs_oracle": 156.54261302490232,
+    "mean_episode_length": 24.83,
+    "mean_routing_cost_proxy": 31.0375,
+    "mean_visit_congestion": 0.20094800844068886,
+    "traffic_congestion_reduction_pct_vs_random": 86.83457051961824,
+    "mean_random_episode_length_baseline": 188.6,
+    "episodes": 100
+  }
+}
