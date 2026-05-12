@@ -68,6 +68,21 @@ def _safe_read_json(path: Path) -> dict:
         return {}
 
 
+def _explain_reward(reward: float, terminated: bool, truncated: bool) -> str:
+    """RL adımındaki reward değerini kullanıcıya anlaşılır şekilde yorumlar."""
+    if terminated and reward > 0:
+        return "Ajan başarılı bir sonuca ulaştı veya hedef park alanına yaklaştı."
+    if truncated:
+        return "Bölüm maksimum adım sınırına ulaştı; ajan hedefe zamanında ulaşamadı."
+    if reward > 0:
+        return "Bu adım olumlu sonuç verdi; ajan hedefe yaklaşmış veya daha avantajlı duruma geçmiş olabilir."
+    if reward < -1:
+        return "Bu adım yüksek ceza aldı; çarpışma, gereksiz tekrar veya kötü yön seçimi olabilir."
+    if reward < 0:
+        return "Bu adım küçük maliyet aldı; ajan hareket ettiği için step cost uygulanmış olabilir."
+    return "Bu adım nötr etki oluşturdu."
+
+
 # ---------------------------------------------------------------------
 # 1) Zaman Serisi Tahmin & Performans
 # ---------------------------------------------------------------------
@@ -322,10 +337,18 @@ with tab_rl:
                     if isinstance(v, (bool, int, float, str))
                 }
 
+                reward_explanation = _explain_reward(
+                    float(reward),
+                    bool(terminated),
+                    bool(truncated),
+                )
+
                 st.session_state["_rl_log"].append(
                     {
+                        "adım": len(st.session_state["_rl_log"]) + 1,
                         "aksiyon": act_labels[int(a)],
                         "reward": float(reward),
+                        "karar_yorumu": reward_explanation,
                         "terminated": bool(terminated),
                         "truncated": bool(truncated),
                         "info": clean_info,
@@ -363,6 +386,8 @@ with tab_rl:
                 "Bölüm durumu",
                 "Bitti" if last_step["terminated"] or last_step["truncated"] else "Devam ediyor",
             )
+
+            st.info(f"Son karar yorumu: {last_step['karar_yorumu']}")
 
     gif1 = ROOT / "output" / "parking_agent.gif"
     gif2 = ROOT / "output" / "rl_rollout.gif"
@@ -534,6 +559,94 @@ with tab_decision:
                     chart_table.set_index("Otopark")[["Doluluk %", "Uygunluk Skoru"]],
                     use_container_width=True,
                 )
+
+                st.divider()
+
+                st.subheader("Dolulukların zaman içindeki değişimi")
+
+                available_times = sorted(dfp["LastUpdated"].dropna().unique())
+
+                if len(available_times) > 1:
+                    anim_points = st.slider(
+                        "Animasyonda gösterilecek zaman adımı sayısı",
+                        min_value=3,
+                        max_value=min(50, len(available_times)),
+                        value=min(12, len(available_times)),
+                        step=1,
+                    )
+
+                    selected_times = available_times[-anim_points:]
+
+                    if "anim_index" not in st.session_state:
+                        st.session_state["anim_index"] = 0
+
+                    if st.session_state["anim_index"] >= len(selected_times):
+                        st.session_state["anim_index"] = 0
+
+                    col_anim_1, col_anim_2 = st.columns(2)
+
+                    with col_anim_1:
+                        if st.button("Animasyonu bir adım ilerlet"):
+                            st.session_state["anim_index"] = (
+                                st.session_state["anim_index"] + 1
+                            ) % len(selected_times)
+
+                    with col_anim_2:
+                        if st.button("Animasyonu sıfırla"):
+                            st.session_state["anim_index"] = 0
+
+                    current_time = selected_times[st.session_state["anim_index"]]
+                    frame_df = dfp[dfp["LastUpdated"] == current_time].copy()
+
+                    if not frame_df.empty:
+                        frame_df["occ_rate"] = frame_df["Occupancy"] / frame_df["Capacity"]
+                        frame_df["Doluluk %"] = frame_df["occ_rate"] * 100
+                        frame_df["Boş Kapasite"] = frame_df["Capacity"] - frame_df["Occupancy"]
+
+                        st.caption(f"Gösterilen zaman adımı: `{current_time}`")
+
+                        frame_table = frame_df[
+                            [
+                                "SystemCodeNumber",
+                                "Capacity",
+                                "Occupancy",
+                                "Boş Kapasite",
+                                "Doluluk %",
+                            ]
+                        ].rename(
+                            columns={
+                                "SystemCodeNumber": "Otopark",
+                                "Capacity": "Kapasite",
+                                "Occupancy": "Dolu",
+                            }
+                        )
+
+                        st.dataframe(
+                            frame_table.style
+                            .format({"Doluluk %": "{:.1f}"})
+                            .background_gradient(subset=["Doluluk %"]),
+                            use_container_width=True,
+                        )
+
+                        st.bar_chart(
+                            frame_table.set_index("Otopark")[["Doluluk %"]],
+                            use_container_width=True,
+                        )
+
+                        best_now = frame_df.loc[frame_df["occ_rate"].idxmin()]
+                        worst_now = frame_df.loc[frame_df["occ_rate"].idxmax()]
+
+                        c1, c2 = st.columns(2)
+                        c1.success(
+                            f"Bu anda en uygun otopark: {best_now['SystemCodeNumber']} "
+                            f"(%{float(best_now['occ_rate']) * 100:.1f} dolu)"
+                        )
+                        c2.error(
+                            f"Bu anda en yoğun otopark: {worst_now['SystemCodeNumber']} "
+                            f"(%{float(worst_now['occ_rate']) * 100:.1f} dolu)"
+                        )
+                else:
+                    st.info("Animasyon için yeterli zaman adımı bulunamadı.")
 
                 st.divider()
 
