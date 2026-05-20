@@ -204,7 +204,12 @@ def eval_baseline_policy(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--part", choices=["lstm", "rl", "baselines", "all"], default="all")
-    parser.add_argument("--rl-algo", choices=["ppo", "dqn"], default="ppo")
+    parser.add_argument(
+        "--rl-algo",
+        choices=["ppo", "dqn", "both"],
+        default="ppo",
+        help="'both' veya --part all: mevcut modeller için PPO ve DQN",
+    )
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--skip-sb3", action="store_true")
     args = parser.parse_args()
@@ -245,8 +250,24 @@ def main() -> None:
 
     if args.part in ("rl", "all") and not args.skip_sb3:
         assert episode_configs is not None
-        out["rl_sb3"] = eval_sb3_algo(args.rl_algo, episode_configs, args.episodes)
-        print("[eval] RL SB3:", out["rl_sb3"])
+        if args.rl_algo == "both" or args.part == "all":
+            algos = ["ppo", "dqn"]
+        else:
+            algos = [args.rl_algo]
+        rl_results: dict = {}
+        for algo in algos:
+            try:
+                rl_results[algo] = eval_sb3_algo(algo, episode_configs, args.episodes)
+                print(f"[eval] RL SB3 ({algo}):", rl_results[algo])
+            except FileNotFoundError as exc:
+                print(f"[eval] RL atlandı ({algo}): {exc}")
+        if rl_results:
+            out["rl_sb3"] = rl_results
+            # Eski tek-algoritma okuyucuları için (Streamlit / notlar)
+            if len(rl_results) == 1:
+                out["rl_sb3_primary"] = next(iter(rl_results.values()))
+            elif "ppo" in rl_results:
+                out["rl_sb3_primary"] = rl_results["ppo"]
 
     EVALUATION_DIR.mkdir(parents=True, exist_ok=True)
     report = EVALUATION_DIR / "metrics.json"

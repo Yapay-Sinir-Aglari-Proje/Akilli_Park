@@ -12,6 +12,11 @@ LSTM_BATCH_SIZE: int = 32
 # Künye (5): MinMaxScaler veya StandardScaler — `utils.data_pipeline.build_processed_dataset`
 FEATURE_SCALER: str = "minmax"  # "minmax" | "standard"
 
+# Künye (5): aykırı değer temizleme — lot bazında IQR (`utils.outliers`)
+OUTLIER_FILTER_ENABLED: bool = True
+OUTLIER_IQR_MULTIPLIER: float = 3.0  # 1.5 daha agresif; 3.0 muhafazakâr
+OUTLIER_MIN_LOT_SAMPLES: int = 30
+
 # ===== RANDOM SEED =====
 RANDOM_SEED: int = 42
 
@@ -48,6 +53,11 @@ GRID_TIMEOUT_PENALTY: float = -200.0
 # Hedefe yaklaşmayı adım başına güçlendirir (Manhattan d_new - d_old pozitifken).
 GRID_MANHATTAN_SHAPING_SCALE: float = 4.5
 GRID_STEP_COST: float = 1.25
+# Başarılı bölüm sonunda BFS optimaline yakınlık ek ödülü (`reward_utils.compute_goal_path_efficiency_bonus`)
+GRID_PATH_EFFICIENCY_SCALE: float = 45.0
+# Çok dolu lot üzerinden geçiş cezası (hedef hücre hariç): yoğunluk senaryolarında “dolmuş alan” vekili
+GRID_HIGH_OCC_THRESHOLD: float = 0.88
+GRID_HIGH_OCC_STEP_PENALTY: float = 22.0
 
 # ===== RL ORTAMI (künye: grid tabanlı simülasyon) =====
 SELECTED_ENV: str = "grid"

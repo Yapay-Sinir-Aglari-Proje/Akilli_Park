@@ -7,7 +7,8 @@ Akış (sıra önemli):
 3) Occupancy doğrula: 0 <= Occupancy <= Capacity, Capacity > 0
 4) LastUpdated -> datetime (hatalıları düşür)
 5) Zamana göre sırala (shuffle yok)
-6) Benzersiz zaman damgası ekseninde %70 / %15 / %15 böl (aynı timestamp iki split’e düşmez)
+6) (İsteğe bağlı) Lot bazında IQR ile aykırı occupancy_rate temizliği
+7) Benzersiz zaman damgası ekseninde %70 / %15 / %15 böl (aynı timestamp iki split’e düşmez)
 
 Çıktılar:
 - data/processed/train.csv, val.csv, test.csv
@@ -19,7 +20,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from ml_config import (
+    OUTLIER_FILTER_ENABLED,
+    OUTLIER_IQR_MULTIPLIER,
+    OUTLIER_MIN_LOT_SAMPLES,
+)
 from paths import DATA_PROCESSED, DATA_RAW, ensure_all_standard_dirs
+from utils.outliers import remove_occupancy_rate_outliers_iqr
 
 
 def load_data(csv_path: Path) -> pd.DataFrame:
@@ -117,7 +124,26 @@ def split_by_timestamps(
     return train_df, val_df, test_df
 
 
-def main() -> None:
+def filter_outliers_if_enabled(df: pd.DataFrame, enabled: bool | None = None) -> pd.DataFrame:
+    """Künye aykırı değer adımı; `ml_config.OUTLIER_FILTER_ENABLED` ile kontrol edilir."""
+    use = OUTLIER_FILTER_ENABLED if enabled is None else enabled
+    if not use:
+        print("[data_prep] Aykırı değer filtresi kapalı.")
+        return df
+    df, stats = remove_occupancy_rate_outliers_iqr(
+        df,
+        iqr_multiplier=OUTLIER_IQR_MULTIPLIER,
+        min_samples_per_lot=OUTLIER_MIN_LOT_SAMPLES,
+    )
+    print(
+        f"[data_prep] Aykırı değer (IQR×{stats['iqr_multiplier']}): "
+        f"{stats['rows_before']} -> {stats['rows_after']} satır "
+        f"({stats['removed']} silindi, %{stats['removed_pct']})"
+    )
+    return df
+
+
+def main(*, no_outliers: bool = False) -> None:
     ensure_all_standard_dirs()
 
     input_path = DATA_RAW / "parking.csv"
@@ -132,6 +158,7 @@ def main() -> None:
     df = drop_duplicates(df)
     df = validate_occupancy(df)
     df = parse_and_sort_time(df)
+    df = filter_outliers_if_enabled(df, enabled=False if no_outliers else None)
 
     print("[data_prep] Eksik değer özeti (temizlik sonrası):")
     print(df.isnull().sum())
@@ -146,4 +173,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="train/val/test CSV üret")
+    parser.add_argument(
+        "--no-outliers",
+        action="store_true",
+        help="Lot bazında IQR aykırı değer filtresini kapat",
+    )
+    args = parser.parse_args()
+    main(no_outliers=args.no_outliers)

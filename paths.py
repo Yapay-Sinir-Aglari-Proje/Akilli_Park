@@ -16,6 +16,7 @@ DATA_RAW: Path = PROJECT_ROOT / "data" / "raw"
 DATA_PROCESSED: Path = PROJECT_ROOT / "data" / "processed"
 PREDICTIONS_DIR: Path = PROJECT_ROOT / "predictions"
 MODELS_DIR: Path = PROJECT_ROOT / "models"
+# Tüm EDA, RL GIF/PNG/CSV ve sunum çıktıları
 OUTPUT_DIR: Path = PROJECT_ROOT / "output"
 EVALUATION_DIR: Path = PROJECT_ROOT / "evaluation" / "reports"
 # RL eğitim çıktıları (Monitor + SB3 progress.csv); rl_visualizer burayı da arar.

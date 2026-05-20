@@ -28,9 +28,9 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 
-from evaluation.visualize import plot_prediction_vs_actual
+from evaluation.visualize import plot_prediction_vs_actual, plot_rl_monitor_returns
 from ml_config import GRID_HEIGHT, GRID_WIDTH, RANDOM_SEED
-from paths import DATA_PROCESSED, EVALUATION_DIR, OUTPUT_DIR, PREDICTIONS_DIR
+from paths import DATA_PROCESSED, EVALUATION_DIR, LOGS_DIR, OUTPUT_DIR, PREDICTIONS_DIR
 
 
 st.set_page_config(page_title="Akıllı Park", layout="wide")
@@ -270,9 +270,66 @@ with tab_rl:
         "python train_rl.py --algo ppo\n"
         "python train_rl.py --algo dqn\n"
         "python train_rl.py --algo both\n"
-        "python -m evaluation.record_parking_gif",
+        "python evaluate.py --part rl --rl-algo both\n"
+        "python visualize_agent.py --presentation\n"
+        "python evaluate_agents.py --episodes 40",
         language="bash",
     )
+
+    st.subheader("Eğitim eğrileri (Monitor)")
+    rl_train_algo = st.selectbox("Eğitim grafiği algoritması", ("ppo", "dqn"), key="rl_train_algo")
+    rl_window = st.slider("Hareketli ortalama penceresi", 10, 200, 50, 5, key="rl_train_window")
+
+    if st.button("Eğitim grafiğini üret / yenile", key="rl_refresh_train_plot"):
+        try:
+            out = plot_rl_monitor_returns(
+                algo=rl_train_algo,
+                window=int(rl_window),
+            )
+            if out is None:
+                st.warning(
+                    f"Monitor CSV yok: `{LOGS_DIR / 'monitor' / rl_train_algo / 'mon_0.monitor.csv'}`. "
+                    "Önce `python train_rl.py` çalıştırın."
+                )
+            else:
+                st.success(f"Grafik kaydedildi: `{out}`")
+        except Exception as exc:
+            st.error(str(exc))
+
+    train_png = OUTPUT_DIR / f"rl_training_returns_{rl_train_algo}.png"
+    if train_png.exists():
+        st.image(str(train_png), caption=f"{rl_train_algo.upper()} — bölüm ödülü (eğitim)", use_container_width=True)
+    else:
+        mon_hint = LOGS_DIR / "monitor" / rl_train_algo / "mon_0.monitor.csv"
+        if mon_hint.exists():
+            st.caption("Grafiği görmek için yukarıdaki **Eğitim grafiğini üret / yenile** düğmesine basın.")
+        else:
+            st.info("Eğitim eğrisi için önce `train_rl.py` ile RL eğitimi yapın.")
+
+    metrics_path = EVALUATION_DIR / "metrics.json"
+    if metrics_path.exists():
+        metrics = _safe_read_json(metrics_path)
+        rl_block = metrics.get("rl_sb3")
+        if isinstance(rl_block, dict) and "ppo" not in rl_block and "dqn" not in rl_block:
+            st.subheader("Değerlendirme özeti (SB3)")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Başarı oranı", f"{float(rl_block.get('success_rate', 0)) * 100:.1f}%")
+            c2.metric("Ort. bölüm getirisi", f"{float(rl_block.get('mean_episode_return', 0)):.1f}")
+            c3.metric("Ort. adım", f"{float(rl_block.get('mean_episode_length', 0)):.1f}")
+            c4.metric(
+                "Trafik azaltma (rastgele’ye göre)",
+                f"{float(rl_block.get('traffic_congestion_reduction_pct_vs_random', 0)):.1f}%",
+            )
+        elif isinstance(rl_block, dict):
+            st.subheader("Değerlendirme özeti (PPO / DQN)")
+            for algo_k, vals in rl_block.items():
+                if not isinstance(vals, dict):
+                    continue
+                st.markdown(f"**{algo_k.upper()}**")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Başarı", f"{float(vals.get('success_rate', 0)) * 100:.1f}%")
+                c2.metric("Ort. getiri", f"{float(vals.get('mean_episode_return', 0)):.1f}")
+                c3.metric("Ort. adım", f"{float(vals.get('mean_episode_length', 0)):.1f}")
 
     scenario = st.selectbox(
         "Senaryo",
@@ -389,6 +446,10 @@ with tab_rl:
             )
 
             st.info(f"Son karar yorumu: {last_step['karar_yorumu']}")
+
+            if len(log_df) >= 2:
+                st.subheader("Adım bazlı ödül")
+                st.line_chart(log_df.set_index("adım")["reward"])
 
     gif1 = ROOT / "output" / "parking_agent.gif"
     gif2 = ROOT / "output" / "rl_rollout.gif"

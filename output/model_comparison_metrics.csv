@@ -1,0 +1,6 @@
+algorithm,mean_reward,mean_steps,success_rate,mean_path_length,mean_invalid_moves,mean_collision_count,mean_time_to_goal_steps,episodes
+random,-751.79964382127,138.375,0.475,128.9,0.0,9.475,70.26315789473684,40
+greedy_shortest_path,356.12125,8.625,1.0,8.625,0.0,0.0,8.625,40
+bfs_oracle,356.12125,8.625,1.0,8.625,0.0,0.0,8.625,40
+ppo,92.25544214248657,23.125,0.925,23.125,0.0,0.0,8.783783783783784,40
+dqn,-1212.6272994995118,147.75,0.275,93.3,0.0,54.45,10.0,40

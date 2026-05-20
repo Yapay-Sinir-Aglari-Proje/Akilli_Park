@@ -1,6 +1,7 @@
 """
 Parking Birmingham (Kaggle) verisi — proje künyesi ile uyumlu özellik üretimi.
 
+- Aykırı değer: lot bazında IQR (`utils.outliers`, `ml_config.OUTLIER_*`) — split öncesi.
 - Eksik Occupancy: lot (SystemCodeNumber) içinde zamana göre ileri doldurma (ffill).
 - Lag / rolling mean ve rolling variance yalnızca geçmişe bakan shift + rolling.
 - Zaman öznitelikleri: saat, gün, hafta içi/sonu; hava benzeri türetilmiş mevsimsel sin/cos.
@@ -25,8 +26,15 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-from ml_config import FEATURE_SCALER, RANDOM_SEED
+from ml_config import (
+    FEATURE_SCALER,
+    OUTLIER_FILTER_ENABLED,
+    OUTLIER_IQR_MULTIPLIER,
+    OUTLIER_MIN_LOT_SAMPLES,
+    RANDOM_SEED,
+)
 from paths import DATA_PROCESSED, DATA_RAW, MODELS_DIR, ensure_all_standard_dirs
+from utils.outliers import remove_occupancy_rate_outliers_iqr
 
 
 LAG_STEPS = (1, 3, 6, 12, 24)
@@ -205,10 +213,30 @@ def load_feature_scaler(models_dir: Path | None = None) -> Tuple[Any, str]:
     return obj, "minmax"
 
 
+def apply_outlier_filter(df: pd.DataFrame, enabled: bool | None = None) -> pd.DataFrame:
+    """Ham/temiz tabloda künye aykırı değer adımı (split ve lag öncesi)."""
+    use = OUTLIER_FILTER_ENABLED if enabled is None else enabled
+    if not use:
+        print("[pipeline] Aykırı değer filtresi kapalı.")
+        return df
+    out, stats = remove_occupancy_rate_outliers_iqr(
+        df,
+        iqr_multiplier=OUTLIER_IQR_MULTIPLIER,
+        min_samples_per_lot=OUTLIER_MIN_LOT_SAMPLES,
+    )
+    print(
+        f"[pipeline] Aykırı değer (IQR×{stats['iqr_multiplier']}): "
+        f"{stats['rows_before']} -> {stats['rows_after']} satır "
+        f"({stats['removed']} silindi, %{stats['removed_pct']})"
+    )
+    return out
+
+
 def build_processed_dataset(
     raw_path: Path | None = None,
     output_path: Path | None = None,
     scaler_kind: ScalerKind | None = None,
+    outlier_filter: bool | None = None,
 ) -> pd.DataFrame:
     ensure_all_standard_dirs()
     raw_path = raw_path or (DATA_RAW / "parking.csv")
@@ -218,6 +246,7 @@ def build_processed_dataset(
         raise FileNotFoundError(f"Ham veri yok: {raw_path}")
 
     df = _load_raw(raw_path)
+    df = apply_outlier_filter(df, enabled=outlier_filter)
     df["split"] = _split_masks_by_timestamp(df["LastUpdated"])
     df = _add_per_lot_history_features(df)
 
@@ -241,9 +270,17 @@ def main() -> None:
         default=None,
         help="Özellik ölçekleyici (varsayılan: ml_config.FEATURE_SCALER)",
     )
+    parser.add_argument(
+        "--no-outliers",
+        action="store_true",
+        help="Lot bazında IQR aykırı değer filtresini kapat (varsayılan: ml_config)",
+    )
     args = parser.parse_args()
     np.random.seed(args.seed)
-    build_processed_dataset(scaler_kind=args.scaler)
+    build_processed_dataset(
+        scaler_kind=args.scaler,
+        outlier_filter=False if args.no_outliers else None,
+    )
 
 
 if __name__ == "__main__":

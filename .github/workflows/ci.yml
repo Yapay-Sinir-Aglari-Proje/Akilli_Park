@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Import smoke test
+        run: |
+          python -c "from utils.outliers import remove_occupancy_rate_outliers_iqr"
+          python -c "from utils.data_pipeline import build_processed_dataset"
+          python -c "import evaluate"
+
+      - name: Data preparation (outlier + split)
+        run: python data_preparation.py
+
+      - name: Processed parquet pipeline
+        run: python -m utils.data_pipeline
+
+      - name: Outlier unit sanity
+        run: |
+          python -c "
+          import pandas as pd
+          import numpy as np
+          from utils.outliers import remove_occupancy_rate_outliers_iqr
+          rng = np.random.default_rng(0)
+          n = 200
+          df = pd.DataFrame({
+              'SystemCodeNumber': ['LOT'] * n,
+              'Capacity': [100] * n,
+              'Occupancy': rng.integers(0, 100, n),
+              'LastUpdated': pd.date_range('2020-01-01', periods=n, freq='h'),
+          })
+          df.loc[0, 'Occupancy'] = 999
+          clean, st = remove_occupancy_rate_outliers_iqr(df, iqr_multiplier=1.5, min_samples_per_lot=30)
+          assert st['removed'] >= 1
+          print('outlier_ok', st)
+          "

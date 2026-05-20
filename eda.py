@@ -265,6 +265,13 @@ def main() -> None:
     plot_rolling_statistics(df, out_dir)
     plot_lot_hour_heatmap(df, out_dir)
 
+    try:
+        from eda_visualizations import run_all as run_extended_eda
+
+        run_extended_eda()
+    except Exception as exc:
+        print(f"[EDA] Genişletilmiş grafikler atlandı: {exc}")
+
     print(f"[EDA] Grafikler kaydedildi: {out_dir}")
 
 

@@ -37,16 +37,20 @@ from ml_config import (
     GRID_FIRST_VISIT_BONUS,
     GRID_GOAL_BONUS,
     GRID_HEIGHT,
+    GRID_HIGH_OCC_STEP_PENALTY,
+    GRID_HIGH_OCC_THRESHOLD,
     GRID_LOOP_PENALTY,
     GRID_LOOP_WINDOW,
     GRID_MANHATTAN_SHAPING_SCALE,
     GRID_MAX_EPISODE_STEPS,
+    GRID_PATH_EFFICIENCY_SCALE,
     GRID_REVISIT_PENALTY,
     GRID_REWARD_CLIP,
     GRID_STEP_COST,
     GRID_TIMEOUT_PENALTY,
     GRID_WIDTH,
 )
+from reward_utils import compute_grid_step_reward
 from utils.coordinates import stable_parking_coordinates
 
 
@@ -56,6 +60,42 @@ ACTION_DOWN = 1
 ACTION_LEFT = 2
 ACTION_RIGHT = 3
 DR_DC = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+SCENARIO_LOW = "low"
+SCENARIO_MEDIUM = "medium"
+SCENARIO_HIGH = "high"
+SCENARIO_DYNAMIC = "dynamic"
+
+
+def _shortest_path_edges_bfs(
+    walls: np.ndarray,
+    height: int,
+    width: int,
+    start: Tuple[int, int],
+    goal: Tuple[int, int],
+) -> int:
+    """Boş koridorlar üzerinden (duvar hariç tüm iç hücreler yürünebilir) BFS kenar sayısı."""
+    if start == goal:
+        return 0
+    q: deque[Tuple[int, int]] = deque([start])
+    dist = {start: 0}
+    while q:
+        r, c = q.popleft()
+        d0 = dist[(r, c)]
+        if (r, c) == goal:
+            return int(d0)
+        for dr, dc in DR_DC:
+            nr, nc = r + dr, c + dc
+            if nr < 0 or nc < 0 or nr >= height or nc >= width:
+                continue
+            if walls[nr, nc]:
+                continue
+            if (nr, nc) in dist:
+                continue
+            dist[(nr, nc)] = d0 + 1
+            q.append((nr, nc))
+    # Bağlantı yoksa (nadir): şekillendirme için güvenli üst sınır
+    return height * width
 
 
 @dataclass
@@ -226,6 +266,14 @@ class GridParkingNavigationEnv(gym.Env):
         **kwargs: Any,
     ):
         kwargs.pop("mode", None)
+        scenario = str(kwargs.pop("scenario", SCENARIO_MEDIUM)).strip().lower()
+        if scenario not in (
+            SCENARIO_LOW,
+            SCENARIO_MEDIUM,
+            SCENARIO_HIGH,
+            SCENARIO_DYNAMIC,
+        ):
+            scenario = SCENARIO_MEDIUM
         super().__init__()
         self._rng = np.random.default_rng(seed)
         self.episode_configs = episode_configs
@@ -234,6 +282,7 @@ class GridParkingNavigationEnv(gym.Env):
         self.render_mode = render_mode
         self.cell_pixels = cell_pixels
         self.reward_debug = reward_debug
+        self.scenario = scenario
 
         self.step_cost = float(GRID_STEP_COST)
         self.manhattan_scale = float(GRID_MANHATTAN_SHAPING_SCALE)
@@ -244,6 +293,9 @@ class GridParkingNavigationEnv(gym.Env):
         self.loop_penalty = float(GRID_LOOP_PENALTY)
         self._loop_window = int(GRID_LOOP_WINDOW)
         self.reward_clip = float(GRID_REWARD_CLIP)
+        self.path_efficiency_scale = float(GRID_PATH_EFFICIENCY_SCALE)
+        self.high_occ_threshold = float(GRID_HIGH_OCC_THRESHOLD)
+        self.high_occ_step_penalty = float(GRID_HIGH_OCC_STEP_PENALTY)
 
         self.height = episode_configs[0].height
         self.width = episode_configs[0].width
@@ -273,6 +325,78 @@ class GridParkingNavigationEnv(gym.Env):
         self._routing_wall_cost = 0.0
         self._occ_path_accum = 0.0
         self._grid_moves = 0
+        self._start: Tuple[int, int] = (0, 0)
+        self._episode_index = 0
+        self._cumulative_reward = 0.0
+        self._collision_count = 0
+        self._invalid_move_count = 0
+        self._shortest_path_len = 1
+        self._occ_base: Optional[np.ndarray] = None
+        self._dynamic_tick = 0
+        self._last_action = -1
+
+    def _apply_scenario_occupancy_scale(self) -> None:
+        """Senaryo: düşük/orta/yüksek yoğunluk — lot doluluklarını ölçekler."""
+        assert self._occ_base is not None
+        if self.scenario == SCENARIO_LOW:
+            scale = 0.55
+        elif self.scenario == SCENARIO_HIGH:
+            scale = 1.35
+        elif self.scenario == SCENARIO_DYNAMIC:
+            scale = 1.0
+        else:
+            scale = 1.0
+        self._occ_heatmap = np.clip(self._occ_base * scale, 0.0, 1.0).astype(
+            np.float32, copy=False
+        )
+
+    def _apply_dynamic_occupancy_shift(self) -> None:
+        """Dinamik senaryo: her adımda rastgele lotların doluluğu değişir (yoğun saat simülasyonu)."""
+        if self.scenario != SCENARIO_DYNAMIC or self._occ_base is None:
+            return
+        self._dynamic_tick += 1
+        if self._dynamic_tick % 4 != 0:
+            return
+        n_flip = max(1, len(self._parking_set) // 6)
+        cells = list(self._parking_set)
+        if not cells:
+            return
+        picks = self._rng.choice(len(cells), size=min(n_flip, len(cells)), replace=False)
+        for i in picks:
+            r, c = cells[int(i)]
+            delta = float(self._rng.uniform(-0.12, 0.12))
+            self._occ_heatmap[r, c] = float(
+                np.clip(self._occ_heatmap[r, c] + delta, 0.0, 1.0)
+            )
+
+    def _enrich_step_info(self, info: Dict[str, Any], reward: float, action: int) -> Dict[str, Any]:
+        """Animasyon paneli ve CSV logları için ortak alanlar."""
+        out = dict(info)
+        out["episode"] = int(self._episode_index)
+        out["step"] = int(self._steps)
+        out["instant_reward"] = float(reward)
+        self._cumulative_reward += float(reward)
+        out["cumulative_reward"] = float(self._cumulative_reward)
+        out["distance_to_goal"] = int(self._manhattan(self._agent, self._goal))
+        out["action"] = int(action)
+        out["action_name"] = ["UP", "DOWN", "LEFT", "RIGHT"][int(action)] if 0 <= action <= 3 else "?"
+        out["path_length"] = max(0, len(self._trail) - 1)
+        out["collision_count"] = int(self._collision_count)
+        out["invalid_moves"] = int(self._invalid_move_count)
+        out["visited_cells"] = len(self._visited)
+        out["scenario"] = self.scenario
+        out["start_position"] = list(self._start)
+        out["target_position"] = list(self._goal)
+        out["agent_position"] = list(self._agent)
+        if out.get("success"):
+            out["status"] = "SUCCESS"
+        elif out.get("timeout"):
+            out["status"] = "TIMEOUT"
+        elif out.get("collision"):
+            out["status"] = "COLLISION_STEP"
+        else:
+            out["status"] = "RUNNING"
+        return out
 
     def _manhattan(self, a: Tuple[int, int], b: Tuple[int, int]) -> int:
         return abs(a[0] - b[0]) + abs(a[1] - b[1])
@@ -328,6 +452,13 @@ class GridParkingNavigationEnv(gym.Env):
         gm = max(1, int(self._grid_moves))
         out["routing_cost_proxy"] = float(self._routing_time_cost + self._routing_wall_cost)
         out["mean_visit_congestion"] = float(self._occ_path_accum / gm)
+        out["path_length"] = max(0, len(self._trail) - 1)
+        out["final_distance_to_goal"] = int(self._manhattan(self._agent, self._goal))
+        out["collision_count"] = int(self._collision_count)
+        out["invalid_moves"] = int(self._invalid_move_count)
+        out["visited_cells"] = len(self._visited)
+        out["cumulative_reward"] = float(self._cumulative_reward)
+        out["shortest_path_len"] = int(self._shortest_path_len)
         return out
 
     def reset(
@@ -340,21 +471,30 @@ class GridParkingNavigationEnv(gym.Env):
         if seed is not None:
             self._rng = np.random.default_rng(seed)
         idx = int(self._rng.integers(0, len(self.episode_configs)))
+        self._episode_index = idx
         cfg = self.episode_configs[idx]
         self._walls = cfg.walls.copy()
         self._parking_set = set(cfg.parking_cells)
         self._goal = cfg.goal_cell
         self._agent = cfg.agent_start
+        self._start = cfg.agent_start
         self._trail = [self._agent]
         self._steps = 0
         self._recent_positions = deque([self._agent], maxlen=self._loop_window)
         self._visited = {self._agent}
         self._episode_loop_events = 0
         self._episode_revisit_events = 0
+        self._cumulative_reward = 0.0
+        self._collision_count = 0
+        self._invalid_move_count = 0
+        self._dynamic_tick = 0
+        self._last_action = -1
 
         self._occ_heatmap = np.zeros((self.height, self.width), dtype=np.float32)
         for (r, c), ov in zip(cfg.parking_cells, cfg.occ_ratios):
             self._occ_heatmap[int(r), int(c)] = float(np.clip(float(ov), 0.0, 1.0))
+        self._occ_base = self._occ_heatmap.copy()
+        self._apply_scenario_occupancy_scale()
         mean_occ = float(np.clip(float(np.mean(cfg.occ_ratios)), 0.0, 1.0))
         if math.isnan(cfg.lstm_aggregate_pred):
             self._lstm_agg_scalar = mean_occ
@@ -366,18 +506,25 @@ class GridParkingNavigationEnv(gym.Env):
         self._routing_wall_cost = 0.0
         self._occ_path_accum = 0.0
         self._grid_moves = 0
+        assert self._walls is not None
+        self._shortest_path_len = _shortest_path_edges_bfs(
+            self._walls, self.height, self.width, self._start, self._goal
+        )
 
         return self._observation(), {}
 
     def step(self, action: int):
         self._steps += 1
         self._routing_time_cost += float(self.step_cost)
+        self._apply_dynamic_occupancy_shift()
         a = int(action)
+        self._last_action = a
         if a < 0 or a > 3:
+            self._invalid_move_count += 1
             obs = self._observation()
             r = self._clip(-self.step_cost)
             truncated = self._steps >= self.max_episode_steps
-            info: Dict[str, Any] = {"invalid": True}
+            info: Dict[str, Any] = {"invalid": True, "success": False, "collision": False}
             if truncated:
                 r = self._clip(r + self.timeout_penalty)
                 info["timeout"] = True
@@ -386,6 +533,7 @@ class GridParkingNavigationEnv(gym.Env):
                 info["loop_count"] = self._episode_loop_events
                 info["revisit_count"] = self._episode_revisit_events
             info = self._merge_episode_cost_metrics(info, False, truncated)
+            info = self._enrich_step_info(info, r, a)
             return obs, r, False, truncated, info
 
         dr, dc = DR_DC[a]
@@ -398,6 +546,7 @@ class GridParkingNavigationEnv(gym.Env):
             or self._walls[nr, nc]
         )
         if hit_wall:
+            self._collision_count += 1
             self._routing_wall_cost += float(self.wall_penalty)
             reward = self._clip(-self.step_cost - self.wall_penalty)
             truncated = self._steps >= self.max_episode_steps
@@ -410,6 +559,7 @@ class GridParkingNavigationEnv(gym.Env):
                 info["loop_count"] = self._episode_loop_events
                 info["revisit_count"] = self._episode_revisit_events
             info = self._merge_episode_cost_metrics(info, False, truncated)
+            info = self._enrich_step_info(info, reward, a)
             return self._observation(), reward, False, truncated, info
 
         old_dist = self._manhattan(self._agent, self._goal)
@@ -420,33 +570,48 @@ class GridParkingNavigationEnv(gym.Env):
         self._recent_positions.append(self._agent)
 
         new_dist = self._manhattan(self._agent, self._goal)
-        reward = -self.step_cost
-        reward += self.manhattan_scale * float(old_dist - new_dist)
-
         was_revisit = self._agent in self._visited
         if was_revisit:
-            reward += self.revisit_penalty
             self._episode_revisit_events += 1
         else:
-            reward += self.first_visit_bonus
             self._visited.add(self._agent)
 
         loop_hit = False
         if self._detect_two_cell_oscillation():
-            reward += self.loop_penalty
             self._episode_loop_events += 1
             loop_hit = True
 
         terminated = self._agent == self._goal
         truncated = self._steps >= self.max_episode_steps
+        path_edges = max(0, len(self._trail) - 1)
 
-        if terminated:
-            reward += self.goal_bonus
-
-        if truncated and not terminated:
-            reward += self.timeout_penalty
-
-        reward = self._clip(reward)
+        reward, _parts = compute_grid_step_reward(
+            step_cost=self.step_cost,
+            manhattan_scale=self.manhattan_scale,
+            old_dist=old_dist,
+            new_dist=new_dist,
+            was_revisit=was_revisit,
+            first_visit_bonus=self.first_visit_bonus,
+            revisit_penalty=self.revisit_penalty,
+            loop_hit=loop_hit,
+            loop_penalty=self.loop_penalty,
+            goal_bonus=self.goal_bonus,
+            timeout_penalty=self.timeout_penalty,
+            terminated=terminated,
+            truncated=truncated,
+            reward_clip=self.reward_clip,
+            shortest_path_len=int(self._shortest_path_len),
+            path_edges=int(path_edges),
+            path_efficiency_scale=self.path_efficiency_scale,
+        )
+        # Dolu park alanı (yüksek doluluk) üzerinden geçiş — hedef hariç ek ceza
+        if (
+            (self._agent in self._parking_set)
+            and (self._agent != self._goal)
+            and float(self._occ_heatmap[self._agent[0], self._agent[1]])
+            >= self.high_occ_threshold
+        ):
+            reward = self._clip(reward - self.high_occ_step_penalty)
 
         info: Dict[str, Any] = {
             "success": bool(terminated),
@@ -463,6 +628,7 @@ class GridParkingNavigationEnv(gym.Env):
             info["revisit_count"] = self._episode_revisit_events
 
         info = self._merge_episode_cost_metrics(info, terminated, truncated)
+        info = self._enrich_step_info(info, reward, a)
 
         if self.reward_debug and (terminated or truncated):
             print(
@@ -473,10 +639,13 @@ class GridParkingNavigationEnv(gym.Env):
 
         return self._observation(), reward, terminated, truncated, info
 
-    def _cell_rgb(self, r: int, c: int) -> Tuple[int, int, int]:
+    def _cell_rgb(self, r: int, c: int, *, on_trail: bool = False) -> Tuple[int, int, int]:
         assert self._walls is not None
         if self._walls[r, c]:
             return (45, 45, 55)
+        # Geçilen yol (ajan dışı): açık mavi / gri ton
+        if on_trail and (r, c) != self._agent:
+            return (175, 205, 235)
         if (r, c) in self._parking_set:
             # Künye arayüz: yeşil (düşük doluluk), sarı (orta), kırmızı (yüksek).
             # Hedef (G) de bir lot hücresi olduğu için aynı renk skalası kullanılır — böylece
@@ -487,7 +656,8 @@ class GridParkingNavigationEnv(gym.Env):
             if o < 0.66:
                 return (220, 200, 80)
             return (190, 60, 60)
-        return (235, 235, 238)
+        # Boş koridor
+        return (240, 248, 210)
 
     def render(self):
         if self.render_mode is None:
@@ -518,30 +688,27 @@ class GridParkingNavigationEnv(gym.Env):
         except OSError:
             font = ImageFont.load_default()
 
+        trail_set = set(self._trail[:-1]) if len(self._trail) > 1 else set()
+        visited_only = self._visited - {self._agent}
+
         for r in range(H):
             for c in range(W):
                 x0, y0 = c * cs, r * cs
+                on_trail = (r, c) in trail_set or (
+                    (r, c) in visited_only and (r, c) not in self._parking_set
+                )
                 drw.rectangle(
                     [x0, y0, x0 + cs - 1, y0 + cs - 1],
-                    fill=self._cell_rgb(r, c),
+                    fill=self._cell_rgb(r, c, on_trail=on_trail),
                     outline=(180, 180, 180),
                 )
 
-        # Rota: emoji/font bağımsız, kalın çizgi (sarı park hücrelerinden ayrışır)
+        # Rota çizgisi (sunumda akışı vurgular)
         if len(self._trail) >= 2:
             pts = [(c * cs + cs // 2, r * cs + cs // 2) for r, c in self._trail]
-            lw = max(6, cs // 3)
-            drw.line(pts, fill=(25, 25, 90), width=lw + 4)
-            drw.line(pts, fill=(0, 210, 255), width=lw)
-            pr = max(3, cs // 7)
-            for r, c in self._trail:
-                cx, cy = c * cs + cs // 2, r * cs + cs // 2
-                drw.ellipse(
-                    [cx - pr, cy - pr, cx + pr, cy + pr],
-                    fill=(0, 170, 220),
-                    outline=(0, 90, 140),
-                    width=1,
-                )
+            lw = max(4, cs // 4)
+            drw.line(pts, fill=(80, 120, 160), width=lw + 2)
+            drw.line(pts, fill=(120, 180, 230), width=lw)
 
         for r, c in self._parking_set:
             if (r, c) == self._goal:
@@ -552,12 +719,23 @@ class GridParkingNavigationEnv(gym.Env):
         gr, gc = self._goal
         gx, gy = gc * cs, gr * cs
         margin = max(2, cs // 14)
-        drw.rounded_rectangle(
-            [gx + margin, gy + margin, gx + cs - 1 - margin, gy + cs - 1 - margin],
-            radius=max(3, cs // 8),
-            outline=(255, 210, 40),
-            width=max(3, cs // 7),
-        )
+        at_goal = self._agent == self._goal
+        goal_fill = (50, 230, 90) if at_goal else None
+        if goal_fill is not None:
+            drw.rounded_rectangle(
+                [gx + margin, gy + margin, gx + cs - 1 - margin, gy + cs - 1 - margin],
+                radius=max(3, cs // 8),
+                fill=goal_fill,
+                outline=(20, 140, 50),
+                width=max(3, cs // 7),
+            )
+        else:
+            drw.rounded_rectangle(
+                [gx + margin, gy + margin, gx + cs - 1 - margin, gy + cs - 1 - margin],
+                radius=max(3, cs // 8),
+                outline=(255, 210, 40),
+                width=max(3, cs // 7),
+            )
         # G: arka plan yeşil/sarı/kırmızı olabileceği için okunaklı kontrast
         o_goal = float(self._occ_heatmap[gr, gc])
         g_fill = (15, 25, 90) if o_goal < 0.5 else (255, 255, 255)
