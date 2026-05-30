@@ -372,7 +372,7 @@ class GridParkingNavigationEnv(gym.Env):
     def _enrich_step_info(self, info: Dict[str, Any], reward: float, action: int) -> Dict[str, Any]:
         """Animasyon paneli ve CSV logları için ortak alanlar."""
         out = dict(info)
-        out["episode"] = int(self._episode_index)
+        out["episode_index"] = int(self._episode_index)
         out["step"] = int(self._steps)
         out["instant_reward"] = float(reward)
         self._cumulative_reward += float(reward)

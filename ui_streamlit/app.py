@@ -31,6 +31,7 @@ from PIL import Image
 from evaluation.visualize import plot_prediction_vs_actual, plot_rl_monitor_returns
 from ml_config import GRID_HEIGHT, GRID_WIDTH, RANDOM_SEED
 from paths import DATA_PROCESSED, EVALUATION_DIR, LOGS_DIR, OUTPUT_DIR, PREDICTIONS_DIR
+from utils.data_pipeline import load_processed_frame
 
 
 st.set_page_config(page_title="Akıllı Park", layout="wide")
@@ -205,10 +206,9 @@ with tab_dash:
         f"{5 * GRID_HEIGHT * GRID_WIDTH + 2} = 5×H×W + 2 skaler",
     )
 
-    pq = DATA_PROCESSED / "processed.parquet"
+    dfp = load_processed_frame()
 
-    if pq.exists():
-        dfp = pd.read_parquet(pq)
+    if dfp is not None:
         dfp["LastUpdated"] = pd.to_datetime(dfp["LastUpdated"], errors="coerce")
         dfp = dfp.dropna(subset=["LastUpdated"])
 
@@ -474,13 +474,12 @@ with tab_decision:
 
     split_dec = st.radio("Veri dilimi", ("test", "train", "val"), horizontal=True)
 
-    pq = DATA_PROCESSED / "processed.parquet"
     pred_path = PREDICTIONS_DIR / "test_predictions.csv"
 
-    if not pq.exists():
+    dfp = load_processed_frame()
+    if dfp is None:
         st.error("Önce `utils.data_pipeline` ile `processed.parquet` oluşturun.")
     else:
-        dfp = pd.read_parquet(pq)
         dfp = dfp[dfp["split"] == split_dec].copy()
 
         dfp["LastUpdated"] = pd.to_datetime(dfp["LastUpdated"], errors="coerce")

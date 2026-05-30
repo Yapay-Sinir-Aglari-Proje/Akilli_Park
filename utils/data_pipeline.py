@@ -232,6 +232,41 @@ def apply_outlier_filter(df: pd.DataFrame, enabled: bool | None = None) -> pd.Da
     return out
 
 
+def _write_parquet_compat(df: pd.DataFrame, output_path: Path) -> None:
+    """PyArrow sürüm uyumsuzluklarını önlemek için fastparquet ile yazar."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        df.to_parquet(output_path, index=False, engine="fastparquet")
+    except ImportError:
+        df.to_parquet(output_path, index=False)
+
+
+def load_processed_frame(path: Path | None = None) -> pd.DataFrame | None:
+    """
+    processed.parquet okur; pyarrow sürüm çakışmasında fastparquet veya CSV dener.
+    """
+    pq = path or (DATA_PROCESSED / "processed.parquet")
+    if pq.exists():
+        for engine in ("fastparquet", "pyarrow", None):
+            try:
+                kwargs = {} if engine is None else {"engine": engine}
+                return pd.read_parquet(pq, **kwargs)
+            except Exception:
+                continue
+
+    parts: list[pd.DataFrame] = []
+    for split in ("train", "val", "test"):
+        csv_path = DATA_PROCESSED / f"{split}.csv"
+        if not csv_path.exists():
+            continue
+        chunk = pd.read_csv(csv_path)
+        chunk["split"] = split
+        parts.append(chunk)
+    if not parts:
+        return None
+    return pd.concat(parts, ignore_index=True)
+
+
 def build_processed_dataset(
     raw_path: Path | None = None,
     output_path: Path | None = None,
@@ -255,8 +290,7 @@ def build_processed_dataset(
         raise ValueError(f"Geçersiz scaler_kind: {sk!r} (minmax | standard)")
     out, _ = _scale_train_only(df, MODELS_DIR, sk)  # type: ignore[arg-type]
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(output_path, index=False)
+    _write_parquet_compat(out, output_path)
     print(f"[pipeline] Parquet yazıldı: {output_path} ({len(out)} satır)")
     return out
 
