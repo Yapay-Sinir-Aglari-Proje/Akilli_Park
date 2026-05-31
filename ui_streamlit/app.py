@@ -528,13 +528,14 @@ with tab_decision:
                     <div style="
                         padding:16px;
                         border-radius:12px;
-                        border:1px solid #ddd;
-                        background-color:#fafafa;
+                        border:1px solid #555;
+                        background-color:#f5f5f5;
+                        color:#1a1a1a;
                         margin-top:10px;
                         margin-bottom:10px;
                     ">
-                        <h4 style="margin-bottom:8px;">Neden bu otopark seçildi?</h4>
-                        <ul>
+                        <h4 style="margin-bottom:8px;color:#1a1a1a;">Neden bu otopark seçildi?</h4>
+                        <ul style="color:#1a1a1a;">
                             <li>
                                 <b>Doluluk seviyesi:</b>
                                 <span style="color:{color};font-weight:bold">{label}</span>
@@ -548,7 +549,7 @@ with tab_decision:
                             </li>
                             <li>
                                 <b>Karar skoru:</b> {float(best["decision_score"]):.3f}
-                                <span style="color:#666;">(düşük skor daha iyi)</span>
+                                <span style="color:#444;">(düşük skor daha iyi)</span>
                             </li>
                             <li>
                                 <b>Seçilme nedeni:</b>
