@@ -1,0 +1,27 @@
+:root {
+  font-family: system-ui, sans-serif;
+  background: #0f1419;
+  color: #e8eef4;
+}
+body {
+  margin: 0;
+  padding: 1rem;
+}
+.card {
+  background: #1a2332;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid #2a3544;
+}
+button {
+  margin: 0.25rem;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+}
+pre {
+  background: #0b0f14;
+  padding: 0.75rem;
+  overflow: auto;
+  border-radius: 6px;
+}
